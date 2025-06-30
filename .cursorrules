@@ -1,0 +1,82 @@
+# Sydney Guide - Cursor Rules
+
+## Project Overview
+
+Sydney Guide: Tourist assistant mobile app with AI chatbot (Claude + MCP integration)
+
+## Critical Language Standards
+
+- **ALL CODE**: English only (variables, functions, classes, strings, keys)
+- **ALL COMMENTS**: Turkish only (no Turkish characters in code)
+- **Example**: `user_location = get_position()  # Kullanicinin konumunu al`
+- **NOT**: `kullanici_konumu = get_position()  # Get user location`
+
+## Architecture
+
+- **MCP-First**: Claude orchestrates through MCP tools, minimal backend logic
+- **Backend**: Python + FastAPI + MCP tools
+- **Frontend**: React Native (chat-centric design)
+- **AI**: Claude API with custom MCP tools
+- **Google APIs**: Use real Google Places/Directions API, no mock data
+
+## MCP Tools Structure
+
+```
+mcp_tools/
+├── location_tool.py      # GPS, Google Geocoding API
+├── places_tool.py        # Google Places API (real data)
+├── transport_tool.py     # Google Directions API (real data)
+└── notification_tool.py  # Mock notifications
+```
+
+## Code Standards
+
+- **Functions**: English names (`get_location`, `find_restaurants`)
+- **Variables**: English names (`restaurant_data`, `transport_route`)
+- **Classes**: English names (`LocationService`, `PlacesTool`)
+- **Files**: English names (`location_tool.py`, `chat_screen.tsx`)
+- **API Responses**: English only (`{"status": "success", "message": "Found"}`)
+- **Comments/Docstrings**: Turkish only (`# Kullanicinin konumunu al`)
+
+## MCP Tool Pattern
+
+```python
+async def get_location(accuracy: str = "high") -> dict:
+    """Kullanicinin mevcut konumunu al"""
+    try:
+        # Konum verilerini al
+        result = await fetch_gps_data(accuracy)
+        return {"status": "success", "data": result}
+    except Exception as error:
+        return {"status": "error", "message": "Konum alinamadi"}
+```
+
+## Development Focus
+
+1. **Real APIs First**: Use Google APIs, not mock data
+2. **Stateless**: Tools are independent and composable
+3. **Error Handling**: Robust error handling in each tool
+4. **Testing**: Unit tests for all MCP functions
+5. **Claude Integration**: Clear tool descriptions for Claude
+
+## Frontend (React Native)
+
+- Chat-centric interface with Claude
+- Context API for state management
+- Real-time MCP communication layer
+- Push notification handling
+
+## Backend (FastAPI)
+
+- Serve MCP tools to Claude
+- Minimal business logic
+- Environment variables for API keys
+- Health checks and monitoring
+
+## Quality Standards
+
+- Type hints for all functions
+- Async/await for all MCP tools
+- Comprehensive error handling
+- Turkish comments, English code
+- Test coverage for all tools
