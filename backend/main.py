@@ -1,359 +1,139 @@
-# Sydney Guide MCP Server
-# Claude ile MCP protokolu uzerinden iletisim kuran ana server
+#!/usr/bin/env python3
+"""
+Sydney Guide MCP Server - BEST PRACTICE IMPLEMENTATION
+Official MCP Python SDK + FastMCP Integration + Claude Integration System
+"""
 
-import asyncio
-import logging
 import os
-import json
+import logging
 from typing import Dict, Any, List
-from pathlib import Path
 from dotenv import load_dotenv
+from mcp.server.fastmcp import FastMCP
 
-# .env dosyasini yukle
-load_dotenv()
+# Load environment variables from parent directory  
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
-# MCP imports
-try:
-    from mcp import create_server, Server
-    from mcp.types import Tool, TextContent
-except ImportError:
-    # Development fallback
-    print("MCP package not found, using development mode")
-    Server = None
-    Tool = None
-    TextContent = None
+# Import Claude Integration System
+from claude_integration.system_prompts import get_system_prompt, get_localized_prompt
+from claude_integration.tool_descriptions import get_tool_description, get_recommended_tools_for_scenario
+from claude_integration.conversation_patterns import get_conversation_flow, format_response_template
 
-import websockets
-from websockets.server import serve
-from fastapi import FastAPI, HTTPException, WebSocket
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.websockets import WebSocketDisconnect
-import uvicorn
-from pydantic import BaseModel
-
-# MCP Tools'lari import et
+# Import all MCP tools
 from mcp_tools.location_tool import get_current_location, calculate_distance
 from mcp_tools.places_tool import search_places, get_place_details, get_places_by_type, get_popular_places
 from mcp_tools.transport_tool import find_nearby_transport, plan_route, get_transport_status
 from mcp_tools.notification_tool import send_notification, schedule_location_alerts, send_journey_reminders, start_journey_tracking, update_journey_location, stop_journey_tracking
 
-# Logging ayarlari
+# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class SydneyGuideMCPServer:
-    """Sydney Guide MCP Server - Claude ile MCP protokolu uzerinden iletisim"""
-    
-    def __init__(self):
-        self.is_running = False
-        self.websocket_clients = set()
-        
-        # MCP tools'lari kaydet
-        self.mcp_tools = {
-            "get_current_location": get_current_location,
-            "calculate_distance": calculate_distance,
-            "search_places": search_places,
-            "get_place_details": get_place_details,
-            "get_places_by_type": get_places_by_type,
-            "get_popular_places": get_popular_places,
-            "find_nearby_transport": find_nearby_transport,
-            "plan_route": plan_route,
-            "get_transport_status": get_transport_status,
-            "send_notification": send_notification,
-            "schedule_location_alerts": schedule_location_alerts,
-            "send_journey_reminders": send_journey_reminders,
-            "start_journey_tracking": start_journey_tracking,
-            "update_journey_location": update_journey_location,
-            "stop_journey_tracking": stop_journey_tracking
-        }
-        
-        # FastAPI app olustur
-        self.app = FastAPI(
-            title="Sydney Guide MCP Server",
-            description="Claude ile MCP protokolu uzerinden iletisim kuran server",
-            version="1.0.0"
-        )
-        self._setup_fastapi_routes()
-        self._setup_cors()
-        
-        logger.info(f"MCP Server initialized with {len(self.mcp_tools)} tools")
-    
-    def _setup_cors(self):
-        """CORS middleware ayarlari"""
-        self.app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
-    
-    def _setup_fastapi_routes(self):
-        """FastAPI routes - MCP WebSocket destegi icin"""
-        
-        @self.app.get("/")
-        async def root():
-            return {
-                "message": "Sydney Guide MCP Server",
-                "status": "running",
-                "protocol": "MCP over WebSocket",
-                "tools_count": len(self.mcp_tools),
-                "tools": list(self.mcp_tools.keys())
-            }
-        
-        @self.app.get("/health")
-        async def health():
-            return {
-                "status": "healthy",
-                "mcp_server": self.is_running,
-                "tools": len(self.mcp_tools)
-            }
-        
-        @self.app.websocket("/mcp")
-        async def websocket_endpoint(websocket: WebSocket):
-            """MCP WebSocket endpoint - Claude ile direkt iletisim"""
-            await self.handle_mcp_websocket(websocket)
-    
-    async def handle_mcp_websocket(self, websocket: WebSocket):
-        """MCP WebSocket baglantisini yonet"""
-        await websocket.accept()
-        self.websocket_clients.add(websocket)
-        logger.info("new_mcp_websocket_connection")
-        
-        try:
-            while True:
-                try:
-                    # Claude'dan gelen mesaji al
-                    message = await websocket.receive_text()
-                    logger.info(f"received_mcp_message: {message[:100]}...")
-                    
-                    # MCP mesajini parse et ve isle
-                    response = await self.process_mcp_message(message)
-                    
-                    # Cevabi Claude'a gonder
-                    await websocket.send_text(json.dumps(response))
-                    logger.info(f"sent_mcp_response: {len(json.dumps(response))} bytes")
-                    
-                except WebSocketDisconnect:
-                    logger.info("mcp_websocket_disconnected")
-                    break
-                except websockets.exceptions.ConnectionClosed:
-                    logger.info("mcp_websocket_connection_closed_normally")
-                    break
-                except websockets.exceptions.ConnectionClosedError:
-                    logger.info("mcp_websocket_connection_closed_error")
-                    break
-                except json.JSONDecodeError as e:
-                    logger.error(f"JSON decode error: {str(e)}")
-                    error_response = {
-                        "error": {
-                            "code": -32700,
-                            "message": "Parse error"
-                        }
-                    }
-                    await websocket.send_text(json.dumps(error_response))
-                except Exception as error:
-                    logger.error(f"MCP message processing error: {str(error)}")
-                    # Send error response but keep connection alive
-                    error_response = {
-                        "error": {
-                            "code": -32603,
-                            "message": f"Internal error: {str(error)}"
-                        }
-                    }
-                    try:
-                        await websocket.send_text(json.dumps(error_response))
-                    except:
-                        # If we can't send error response, connection is broken
-                        break
-                        
-        except WebSocketDisconnect:
-            logger.info("mcp_websocket_disconnected")
-        except websockets.exceptions.ConnectionClosed:
-            logger.info("mcp_websocket_connection_closed_normally")
-        except Exception as error:
-            logger.error(f"MCP WebSocket error: {error}")
-        finally:
-            self.websocket_clients.discard(websocket)
-            logger.info("mcp_websocket_connection_closed")
-    
-    async def process_mcp_message(self, message: str) -> Dict[str, Any]:
-        """MCP mesajini isle ve cevap dondur"""
-        try:
-            # JSON mesajini parse et
-            mcp_request = json.loads(message)
-            
-            # MCP request tipine gore isle
-            if mcp_request.get("method") == "tools/list":
-                return self.list_tools()
-            
-            elif mcp_request.get("method") == "tools/call":
-                tool_name = mcp_request.get("params", {}).get("name")
-                tool_arguments = mcp_request.get("params", {}).get("arguments", {})
-                return await self.call_tool(tool_name, tool_arguments)
-            
-            else:
-                return {
-                    "error": {
-                        "code": -32601,
-                        "message": f"Method not found: {mcp_request.get('method')}"
-                    }
-                }
-                
-        except json.JSONDecodeError:
-            return {
-                "error": {
-                    "code": -32700,
-                    "message": "parse_error_invalid_json"
-                }
-            }
-        except Exception as error:
-            return {
-                "error": {
-                    "code": -32603,
-                    "message": f"internal_error: {str(error)}"
-                }
-            }
-    
-    def list_tools(self) -> Dict[str, Any]:
-        """MCP tools listesini dondur"""
-        tools = []
-        
-        for tool_name, tool_func in self.mcp_tools.items():
-            try:
-                # Tool metadata'sini guvende olustur
-                mcp_parameters = getattr(tool_func, '_mcp_parameters', {})
-                mcp_description = getattr(tool_func, '_mcp_description', None)
-                
-                # Eger parameters None ise bos dict kullan
-                if mcp_parameters is None:
-                    logger.warning(f"Tool {tool_name} has None parameters, using empty dict")
-                    mcp_parameters = {}
-                
-                # Eger description None ise fallback kullan
-                if mcp_description is None:
-                    mcp_description = tool_func.__doc__ or f"{tool_name} tool"
-                    logger.info(f"Tool {tool_name} using fallback description")
-                
-                # JSON serializable oldugunu kontrol et
-                properties = dict(mcp_parameters) if isinstance(mcp_parameters, dict) else {}
-                
-                # Tool schema'yi olustur
-                tool_schema = {
-                    "name": tool_name,
-                    "description": str(mcp_description).strip(),
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": properties,
-                        "required": []
-                    }
-                }
-                
-                # JSON serialization test et
-                json.dumps(tool_schema)
-                tools.append(tool_schema)
-                logger.debug(f"Tool {tool_name} added successfully")
-                
-            except Exception as error:
-                logger.error(f"Error adding tool {tool_name}: {str(error)}")
-                # Minimal fallback tool schema
-                fallback_schema = {
-                    "name": tool_name,
-                    "description": f"Sydney Guide tool: {tool_name}",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                    }
-                }
-                tools.append(fallback_schema)
-        
-        logger.info(f"Returning {len(tools)} MCP tools to Claude")
-        return {
-            "result": {
-                "tools": tools
-            }
-        }
-    
-    async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """MCP tool'u calistir"""
-        try:
-            if tool_name not in self.mcp_tools:
-                return {
-                    "error": {
-                        "code": -32602,
-                        "message": f"Tool not found: {tool_name}"
-                    }
-                }
-            
-            # Tool'u calistir
-            tool_func = self.mcp_tools[tool_name]
-            result = await tool_func(**arguments)
-            
-            return {
-                "result": {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": json.dumps(result, indent=2)
-                        }
-                    ]
-                }
-            }
-            
-        except Exception as error:
-            logger.error(f"Tool execution error: {str(error)}")
-            return {
-                "error": {
-                    "code": -32603,
-                    "message": f"Tool execution failed: {str(error)}"
-                }
-            }
-    
-    async def start_server(self, host: str = "localhost", port: int = 8888):
-        """MCP server'i baslat"""
-        logger.info(f"Starting Sydney Guide MCP Server on {host}:{port}")
-        self.is_running = True
-        
-        # FastAPI server'i baslat
-        config = uvicorn.Config(
-            app=self.app,
-            host=host,
-            port=port,
-            log_level="info"
-        )
-        server = uvicorn.Server(config)
-        await server.serve()
-    
-    async def stop_server(self):
-        """MCP server'i durdur"""
-        logger.info("Stopping Sydney Guide MCP Server")
-        self.is_running = False
-        
-        # Aktif WebSocket baglantilari kapat
-        for websocket in self.websocket_clients:
-            try:
-                await websocket.close()
-            except:
-                pass
-        
-        self.websocket_clients.clear()
+# Initialize FastMCP with Claude Integration
+mcp = FastMCP("Sydney Guide MCP Server")
 
-# Global server instance
-server_instance = SydneyGuideMCPServer()
+# Add system prompt configuration
+@mcp.prompt()
+def sydney_guide_system_prompt(language: str = "english", scenario: str = "general") -> str:
+    """Sydney Guide sistem prompt'u - Claude icin kisilik ve talimatlar"""
+    return get_localized_prompt(language, scenario)
 
-# FastAPI app instance for uvicorn (global olarak erisebilir)
-app = server_instance.app
+# Register all MCP tools with Claude Integration descriptions
+@mcp.tool()
+async def get_current_location_mcp(accuracy: str = "high") -> Dict[str, Any]:
+    """Kullanicinin mevcut konumunu al - Claude Integration enabled"""
+    return await get_current_location(accuracy)
 
-async def create_server():
-    """Server instance olustur"""
-    global server_instance
-    return server_instance
+@mcp.tool()
+async def calculate_distance_mcp(start_lat: float, start_lng: float, 
+                               end_lat: float, end_lng: float, unit: str = "km") -> Dict[str, Any]:
+    """Iki nokta arasindaki mesafeyi hesapla"""
+    return await calculate_distance(start_lat, start_lng, end_lat, end_lng, unit)
+
+@mcp.tool()
+async def search_places_mcp(query: str = "", lat: float = -33.8688, lng: float = 151.2093,
+                           place_type: str = "all", radius: float = 5.0, max_results: int = 10) -> Dict[str, Any]:
+    """Sydney'de yer ara - Claude Integration enabled"""
+    return await search_places(query, lat, lng, place_type, radius, max_results)
+
+@mcp.tool()
+async def get_place_details_mcp(place_id: str) -> Dict[str, Any]:
+    """Yer detaylarini al"""
+    return await get_place_details(place_id)
+
+@mcp.tool()
+async def get_places_by_type_mcp(place_type: str, limit: int = 10) -> Dict[str, Any]:
+    """Tip bazinda yer listesi al"""
+    return await get_places_by_type(place_type, limit)
+
+@mcp.tool()
+async def get_popular_places_mcp(limit: int = 5) -> Dict[str, Any]:
+    """Populer yerleri al"""
+    return await get_popular_places(limit)
+
+@mcp.tool()
+async def find_nearby_transport_mcp(lat: float, lng: float, transport_type: str = "all",
+                                  radius: float = 1.0, max_results: int = 5) -> Dict[str, Any]:
+    """Yakin ulasim duraklarini bul - Claude Integration enabled"""
+    return await find_nearby_transport(lat, lng, transport_type, radius, max_results)
+
+@mcp.tool()
+async def plan_route_mcp(origin_lat: float, origin_lng: float, destination_lat: float, destination_lng: float,
+                        travel_modes: List[str] = ["transit", "walking"], departure_time: str = "now") -> Dict[str, Any]:
+    """Rota planla - Claude Integration enabled"""
+    return await plan_route(origin_lat, origin_lng, destination_lat, destination_lng, travel_modes, departure_time)
+
+@mcp.tool()
+async def get_transport_status_mcp(stop_id: str, transport_type: str = "train", limit: int = 5) -> Dict[str, Any]:
+    """Ulasim durum bilgisi al"""
+    return await get_transport_status(stop_id, transport_type, limit)
+
+@mcp.tool()
+async def send_notification_mcp(user_token: str, title: str, body: str, priority: str = "medium") -> Dict[str, Any]:
+    """Bildirim gonder - Claude Integration enabled"""
+    return await send_notification(user_token, title, body, priority)
+
+@mcp.tool()
+async def schedule_location_alerts_mcp(user_token: str, journey_waypoints: List[Dict[str, Any]],
+                                     alert_radius: float = 500, alert_types: List[str] = ["all"]) -> Dict[str, Any]:
+    """Konum bazli uyari ayarla"""
+    return await schedule_location_alerts(user_token, journey_waypoints, alert_radius, alert_types)
+
+@mcp.tool()
+async def send_journey_reminders_mcp(user_token: str, journey_plan: Dict[str, Any],
+                                   reminder_minutes: List[int] = [15, 5]) -> Dict[str, Any]:
+    """Yolculuk hatirlatici gonder"""
+    return await send_journey_reminders(user_token, journey_plan, reminder_minutes)
+
+@mcp.tool()
+async def start_journey_tracking_mcp(user_token: str, journey_plan: Dict[str, Any],
+                                   tracking_options: Dict[str, Any] = {}) -> Dict[str, Any]:
+    """Yolculuk takibini baslat"""
+    return await start_journey_tracking(user_token, journey_plan, tracking_options or {})
+
+@mcp.tool()
+async def update_journey_location_mcp(session_id: str, current_location: Dict[str, Any],
+                                    movement_data: Dict[str, Any] = {}) -> Dict[str, Any]:
+    """Yolculuk konumunu guncelle"""  
+    return await update_journey_location(session_id, current_location, movement_data or {})
+
+@mcp.tool()
+async def stop_journey_tracking_mcp(session_id: str) -> Dict[str, Any]:
+    """Yolculuk takibini durdur"""
+    return await stop_journey_tracking(session_id)
 
 if __name__ == "__main__":
-    # Server'i baslat
-    async def main():
-        server = await create_server()
-        await server.start_server()
+    # Run with FastMCP + Claude Integration System
+    logger.info("Starting Sydney Guide MCP Server with Claude Integration")
+    logger.info("System prompts, conversation patterns, and tool descriptions loaded")
+    logger.info("All MCP tools registered for Claude")
     
-    asyncio.run(main())
+    # Log integration status
+    try:
+        system_prompt = get_system_prompt("english", "general")
+        logger.info("✅ Claude Integration System loaded successfully")
+    except Exception as e:
+        logger.warning(f"⚠️ Claude Integration System error: {e}")
+        logger.info("Server will run with basic MCP tools only")
+    
+    # Run the MCP server
+    mcp.run() 

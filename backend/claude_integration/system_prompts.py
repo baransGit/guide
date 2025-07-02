@@ -1,7 +1,7 @@
 # Sydney Guide - System Prompts for Claude
 # Claude'un kisilik, rol ve temel talimatlarini tanimlayan sistem prompt'lari
 
-# Modular yapiyi import et - tum fonksiyonalite alt modullerden gelir
+# Import from the system_prompts subdirectory __init__.py
 from .system_prompts import (
     SYDNEY_GUIDE_SYSTEM_PROMPT,
     LANGUAGE_SPECIFIC_PROMPTS,

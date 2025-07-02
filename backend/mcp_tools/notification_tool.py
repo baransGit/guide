@@ -62,21 +62,6 @@ NOTIFICATION_TEMPLATES = {
     }
 }
 
-@mcp_tool(
-    name="send_notification",
-    description="Send push notification to user",
-    parameters={
-        "user_token": {"type": "string", "description": "User's push notification token"},
-        "title": {"type": "string", "description": "Notification title"},
-        "body": {"type": "string", "description": "Notification body text"},
-        "priority": {
-            "type": "string",
-            "enum": ["low", "medium", "high"],
-            "default": "medium",
-            "description": "Notification priority"
-        }
-    }
-)
 async def send_notification(user_token: str, title: str, body: str, priority: str = "medium") -> Dict[str, Any]:
     """
     Kullaniciya push notification gonder (mock veya gercek FCM)
@@ -129,21 +114,6 @@ async def send_notification(user_token: str, title: str, body: str, priority: st
             "timestamp": datetime.now().isoformat()
         }
 
-@mcp_tool(
-    name="schedule_location_alerts",
-    description="Set up location-based notification alerts for user journey",
-    parameters={
-        "user_token": {"type": "string", "description": "User's push notification token"},
-        "journey_waypoints": {"type": "array", "items": {"type": "object"}, "description": "List of journey waypoints with lat/lng"},
-        "alert_radius": {"type": "number", "default": 500, "description": "Alert radius in meters"},
-        "alert_types": {
-            "type": "array", 
-            "items": {"type": "string", "enum": ["attractions", "restaurants", "transport", "all"]},
-            "default": ["all"],
-            "description": "Types of alerts to enable"
-        }
-    }
-)
 async def schedule_location_alerts(user_token: str, journey_waypoints: List[Dict[str, Any]],
                                  alert_radius: float = 500, 
                                  alert_types: List[str] = ["all"]) -> Dict[str, Any]:
@@ -203,15 +173,6 @@ async def schedule_location_alerts(user_token: str, journey_waypoints: List[Dict
             "timestamp": datetime.now().isoformat()
         }
 
-@mcp_tool(
-    name="send_journey_reminders",
-    description="Send reminders for upcoming transport connections",
-    parameters={
-        "user_token": {"type": "string", "description": "User's push notification token"},
-        "journey_plan": {"type": "object", "description": "Journey plan with transport steps"},
-        "reminder_minutes": {"type": "array", "items": {"type": "integer"}, "default": [15, 5], "description": "Minutes before departure to send reminders"}
-    }
-)
 async def send_journey_reminders(user_token: str, journey_plan: Dict[str, Any],
                                reminder_minutes: List[int] = [15, 5]) -> Dict[str, Any]:
     """
@@ -274,22 +235,6 @@ async def send_journey_reminders(user_token: str, journey_plan: Dict[str, Any],
             "timestamp": datetime.now().isoformat()
         }
 
-@mcp_tool(
-    name="start_journey_tracking",
-    description="Start real-time journey tracking with GPS monitoring and proximity alerts",
-    parameters={
-        "user_token": {"type": "string", "description": "User's push notification token"},
-        "journey_plan": {"type": "object", "description": "Complete journey plan with stops and waypoints"},
-        "tracking_options": {
-            "type": "object",
-            "properties": {
-                "alert_distance_meters": {"type": "number", "default": 200},
-                "stops_ahead_warning": {"type": "number", "default": 2},
-                "gps_update_interval": {"type": "number", "default": 10}
-            }
-        }
-    }
-)
 async def start_journey_tracking(user_token: str, journey_plan: Dict[str, Any], 
                                tracking_options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
@@ -372,15 +317,6 @@ async def start_journey_tracking(user_token: str, journey_plan: Dict[str, Any],
             "timestamp": datetime.now().isoformat()
         }
 
-@mcp_tool(
-    name="update_journey_location",
-    description="Update user's current GPS location during journey tracking",
-    parameters={
-        "session_id": {"type": "string", "description": "Active journey tracking session ID"},
-        "current_location": {"type": "object", "description": "Current GPS coordinates"},
-        "movement_data": {"type": "object", "description": "Speed, direction, accuracy data"}
-    }
-)
 async def update_journey_location(session_id: str, current_location: Dict[str, Any], 
                                 movement_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
@@ -523,13 +459,6 @@ def calculate_distance_simple(lat1: float, lng1: float, lat2: float, lng2: float
     
     return distance
 
-@mcp_tool(
-    name="stop_journey_tracking",
-    description="Stop active journey tracking session",
-    parameters={
-        "session_id": {"type": "string", "description": "Journey tracking session ID to stop"}
-    }
-)
 async def stop_journey_tracking(session_id: str) -> Dict[str, Any]:
     """
     Aktif yolculuk takibini durdur

@@ -1,387 +1,67 @@
-# Sydney Guide - Places MCP Tool
-# Sydney'deki mekanları ve yerleri bulan kapsamlı MCP araci
+#!/usr/bin/env python3
+"""
+Places Tool - Clean Architecture Version
+Uses organized fixtures from tests/fixtures/ instead of hardcoded data
+Proper USE_REAL_API logic for all functions
+"""
 
-import asyncio
-import json
-import math
-import os
 import logging
-from typing import Dict, Any, List, Optional
+import os
 from datetime import datetime
-import aiohttp
+from typing import Dict, Any, List
 import googlemaps
-from dotenv import load_dotenv
 
-# Setup logger
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from correct location
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
 
-# Environment configuration
+# Environment variables
 USE_REAL_API = os.getenv('MOCK_MODE', 'true').lower() == 'false'
-GOOGLE_MAPS_API_KEY = os.getenv('GOOGLE_MAPS_API_KEY', '')
+GOOGLE_MAPS_API_KEY = os.getenv('GOOGLE_MAPS_API_KEY')
 
-# MCP imports
+# Import clean fixtures from tests directory  
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+
 try:
-    from mcp import mcp_tool
-except ImportError:
-    # Fallback decorator for development
-    def mcp_tool(name: str, description: str, parameters: dict = {}):
-        def decorator(func):
-            func._mcp_name = name
-            func._mcp_description = description
-            func._mcp_parameters = parameters or {}
-            return func
-        return decorator
+    from tests.fixtures.mock_places_data import get_all_mock_places
+    logger.info("✅ Successfully imported clean fixtures from tests/fixtures/")
+except ImportError as e:
+    logger.warning(f"❌ Could not import fixtures: {e}, using fallback")
+    # Fallback to minimal mock data if fixtures fail
+    def get_all_mock_places():
+        return {
+            "place_001": {
+                "place_id": "place_001",
+                "name": "Sydney Opera House", 
+                "place_type": "tourist_attraction",
+                "lat": -33.8568,
+                "lng": 151.2153,
+                "rating": 4.6,
+                "price_level": 4,
+                "description": "World-famous performing arts venue",
+                "address": "Bennelong Point, Sydney NSW 2000"
+            }
+        }
 
-# Sydney'nin zengin mock verileri
-PLACES_DATABASE = {
-    # Tourist Attractions - Turistik Yerler
-    "place_001": {
-        "place_id": "place_001",
-        "name": "Sydney Opera House",
-        "place_type": "tourist_attraction",
-        "lat": -33.8568,
-        "lng": 151.2153,
-        "address": "Bennelong Point, Sydney NSW 2000",
-        "rating": 4.6,
-        "price_level": 4,
-        "description": "World-famous performing arts venue and architectural icon",
-        "opening_hours": "Tours: 9:00 AM - 5:00 PM",
-        "phone": "+61 2 9250 7111",
-        "website": "sydneyoperahouse.com",
-        "features": ["tours", "performances", "dining", "gift_shop"]
-    },
-    "place_002": {
-        "place_id": "place_002", 
-        "name": "Sydney Harbour Bridge",
-        "place_type": "tourist_attraction",
-        "lat": -33.8523,
-        "lng": 151.2108,
-        "address": "Sydney Harbour Bridge, Sydney NSW",
-        "rating": 4.5,
-        "price_level": 3,
-        "description": "Iconic steel arch bridge with BridgeClimb experiences",
-        "opening_hours": "BridgeClimb: Various times",
-        "phone": "+61 2 8274 7777",
-        "website": "bridgeclimb.com",
-        "features": ["bridge_climb", "pylon_lookout", "walking", "cycling"]
-    },
-    
-    # Restaurants - Restoranlar
-    "place_003": {
-        "place_id": "place_003",
-        "name": "Quay Restaurant",
-        "place_type": "restaurant",
-        "lat": -33.8584,
-        "lng": 151.2106,
-        "address": "Upper Level, Overseas Passenger Terminal, The Rocks NSW 2000",
-        "rating": 4.4,
-        "price_level": 4,
-        "cuisine": "modern_australian",
-        "description": "Award-winning fine dining with harbour views",
-        "opening_hours": "Tue-Sat: 6:00 PM - 10:00 PM",
-        "phone": "+61 2 9251 5600",
-        "website": "quay.com.au",
-        "features": ["harbour_view", "fine_dining", "wine_list", "romantic"]
-    },
-    "place_004": {
-        "place_id": "place_004",
-        "name": "Bennelong Restaurant",
-        "place_type": "restaurant", 
-        "lat": -33.8568,
-        "lng": 151.2153,
-        "address": "Sydney Opera House, Bennelong Point NSW 2000",
-        "rating": 4.2,
-        "price_level": 4,
-        "cuisine": "modern_australian",
-        "description": "Fine dining inside the iconic Opera House",
-        "opening_hours": "Tue-Sat: 5:30 PM - 10:00 PM",
-        "phone": "+61 2 9240 8000",
-        "website": "bennelong.com.au",
-        "features": ["opera_house", "fine_dining", "harbour_view", "special_occasion"]
-    },
-    
-    # Shopping - Alisveris
-    "place_005": {
-        "place_id": "place_005",
-        "name": "Queen Victoria Building (QVB)",
-        "place_type": "shopping_mall",
-        "lat": -33.8719,
-        "lng": 151.2062,
-        "address": "455 George St, Sydney NSW 2000",
-        "rating": 4.3,
-        "price_level": 3,
-        "description": "Historic shopping centre with luxury boutiques",
-        "opening_hours": "Mon-Sat: 9:00 AM - 6:00 PM, Sun: 11:00 AM - 5:00 PM",
-        "phone": "+61 2 9265 6800",
-        "website": "qvb.com.au",
-        "features": ["luxury_shopping", "historic_building", "dining", "fashion"]
-    },
-    "place_006": {
-        "place_id": "place_006",
-        "name": "Westfield Sydney",
-        "place_type": "shopping_mall",
-        "lat": -33.8704,
-        "lng": 151.2065,
-        "address": "188 Pitt St, Sydney NSW 2000",
-        "rating": 4.1,
-        "price_level": 3,
-        "description": "Modern shopping center in Sydney CBD",
-        "opening_hours": "Mon-Wed,Fri-Sat: 9:30 AM - 7:00 PM, Thu: 9:30 AM - 9:00 PM",
-        "phone": "+61 2 8236 9200",
-        "website": "westfield.com.au",
-        "features": ["department_stores", "fashion", "food_court", "electronics"]
-    },
-    
-    # Museums - Muzeler
-    "place_007": {
-        "place_id": "place_007",
-        "name": "Australian Museum",
-        "place_type": "museum",
-        "lat": -33.8742,
-        "lng": 151.2135,
-        "address": "1 William St, Sydney NSW 2010",
-        "rating": 4.2,
-        "price_level": 2,
-        "description": "Australia's first museum with natural history collections",
-        "opening_hours": "Daily: 9:30 AM - 5:00 PM",
-        "phone": "+61 2 9320 6000",
-        "website": "australian.museum",
-        "features": ["natural_history", "exhibitions", "planetarium", "family_friendly"]
-    },
-    "place_008": {
-        "place_id": "place_008",
-        "name": "Art Gallery of NSW",
-        "place_type": "museum",
-        "lat": -33.8688,
-        "lng": 151.2168,
-        "address": "Art Gallery Rd, The Domain NSW 2000",
-        "rating": 4.4,
-        "price_level": 1,
-        "description": "Premier art gallery with Australian and international works",
-        "opening_hours": "Daily: 10:00 AM - 5:00 PM",
-        "phone": "+61 2 9225 1700",
-        "website": "artgallery.nsw.gov.au",
-        "features": ["australian_art", "international_art", "free_entry", "temporary_exhibitions"]
-    },
-    
-    # Parks - Parklar
-    "place_009": {
-        "place_id": "place_009",
-        "name": "Royal Botanic Gardens Sydney",
-        "place_type": "park",
-        "lat": -33.8642,
-        "lng": 151.2166,
-        "address": "Mrs Macquaries Rd, Sydney NSW 2000",
-        "rating": 4.6,
-        "price_level": 0,
-        "description": "Historic botanical gardens with harbour views",
-        "opening_hours": "Daily: 7:00 AM - sunset",
-        "phone": "+61 2 9231 8111",
-        "website": "botanicgardens.org.au",
-        "features": ["botanical_gardens", "harbour_views", "walking_trails", "free_entry"]
-    },
-    "place_010": {
-        "place_id": "place_010",
-        "name": "Hyde Park",
-        "place_type": "park",
-        "lat": -33.8732,
-        "lng": 151.2104,
-        "address": "Elizabeth St, Sydney NSW 2000",
-        "rating": 4.3,
-        "price_level": 0,
-        "description": "Historic city park in the heart of Sydney CBD",
-        "opening_hours": "24 hours",
-        "phone": "+61 2 9265 9333",
-        "website": "cityofsydney.nsw.gov.au",
-        "features": ["historic_park", "anzac_memorial", "walking_paths", "events"]
-    },
-    
-    # Transport - Ulasim
-    "place_011": {
-        "place_id": "place_011",
-        "name": "Circular Quay Station",
-        "place_type": "transport",
-        "lat": -33.8611,
-        "lng": 151.2107,
-        "address": "Alfred St, Sydney NSW 2000",
-        "rating": 4.0,
-        "price_level": 0,
-        "description": "Major transport hub for trains, buses, and ferries",
-        "opening_hours": "24 hours",
-        "phone": "+61 131 500",
-        "website": "transportnsw.info",
-        "features": ["train_station", "ferry_terminal", "bus_stop", "taxi_rank"]
-    },
-    
-    # Entertainment - Eglence
-    "place_012": {
-        "place_id": "place_012",
-        "name": "State Theatre",
-        "place_type": "entertainment",
-        "lat": -33.8721,
-        "lng": 151.2076,
-        "address": "49 Market St, Sydney NSW 2000",
-        "rating": 4.5,
-        "price_level": 3,
-        "description": "Historic theatre hosting musicals, concerts and events",
-        "opening_hours": "Event dependent",
-        "phone": "+61 2 9373 6655",
-        "website": "statetheatre.com.au",
-        "features": ["live_music", "theatre", "concerts", "historic_venue"]
-    },
-    
-    # Vegan Restaurants - Surry Hills & Newtown (Gercek Sydney vegan sahnesi)
-    "place_013": {
-        "place_id": "place_013", 
-        "name": "Yellow Food Store",
-        "place_type": "restaurant",
-        "lat": -33.8847,
-        "lng": 151.2099,
-        "address": "57 Macleay St, Potts Point NSW 2011",
-        "rating": 4.7,
-        "price_level": 2,
-        "cuisine": "vegan",
-        "description": "100% plant-based organic vegan restaurant and grocer",
-        "opening_hours": "Daily: 7:00 AM - 8:00 PM",
-        "phone": "+61 2 9357 3400",
-        "website": "yellowfoodstore.com.au",
-        "features": ["vegan", "organic", "gluten_free", "raw_food", "grocery"]
-    },
-    "place_014": {
-        "place_id": "place_014",
-        "name": "Gigi Pizzeria",
-        "place_type": "restaurant", 
-        "lat": -33.8964,
-        "lng": 151.1794,
-        "address": "379 King St, Newtown NSW 2042",
-        "rating": 4.5,
-        "price_level": 2,
-        "cuisine": "vegan",
-        "description": "Plant-based pizza with creative vegan toppings",
-        "opening_hours": "Wed-Sun: 5:00 PM - 10:00 PM",
-        "phone": "+61 2 9557 4332",
-        "website": "gigipizzeria.com.au",
-        "features": ["vegan", "pizza", "newtown", "casual_dining"]
-    },
-    "place_015": {
-        "place_id": "place_015",
-        "name": "Bodhi Restaurant Bar",
-        "place_type": "restaurant",
-        "lat": -33.8836,
-        "lng": 151.2006,
-        "address": "2/24 College St, Darlinghurst NSW 2010",
-        "rating": 4.6,
-        "price_level": 3,
-        "cuisine": "vegan",
-        "description": "Upscale vegan dining with innovative plant-based cuisine",
-        "opening_hours": "Tue-Sat: 6:00 PM - 11:00 PM",
-        "phone": "+61 2 9360 2523",
-        "website": "bodhirestaurantbar.com.au",
-        "features": ["vegan", "fine_dining", "cocktails", "date_night"]
-    },
-    "place_016": {
-        "place_id": "place_016",
-        "name": "About Life Newtown",
-        "place_type": "restaurant",
-        "lat": -33.8964,
-        "lng": 151.1822,
-        "address": "407-409 King St, Newtown NSW 2042", 
-        "rating": 4.3,
-        "price_level": 2,
-        "cuisine": "vegan",
-        "description": "Health food store with extensive vegan cafe menu",
-        "opening_hours": "Daily: 8:00 AM - 8:00 PM",
-        "phone": "+61 2 9517 4000",
-        "website": "aboutlife.com.au",
-        "features": ["vegan", "health_food", "organic", "grocery", "newtown"]
-    },
-    "place_017": {
-        "place_id": "place_017",
-        "name": "Baxter's Inn",
-        "place_type": "entertainment",
-        "lat": -33.8739,
-        "lng": 151.2071,
-        "address": "152-156 Clarence St, Sydney NSW 2000",
-        "rating": 4.3,
-        "price_level": 3,
-        "description": "Hidden whiskey bar with extensive collection",
-        "opening_hours": "Tue-Sat: 4:00 PM - 1:00 AM",
-        "phone": "+61 2 9264 2382",
-        "website": "baxtersinn.com",
-        "features": ["whiskey_bar", "cocktails", "intimate", "hidden_entrance"]
-    },
-    
-    # More Restaurants - Daha fazla restoran
-    "place_014": {
-        "place_id": "place_014",
-        "name": "Din Tai Fung",
-        "place_type": "restaurant",
-        "lat": -33.8704,
-        "lng": 151.2065,
-        "address": "Level 1, Westfield Sydney, 188 Pitt St, Sydney NSW 2000",
-        "rating": 4.1,
-        "price_level": 2,
-        "cuisine": "chinese",
-        "description": "Famous taiwanese restaurant chain known for xiaolongbao",
-        "opening_hours": "Daily: 11:00 AM - 9:00 PM",
-        "phone": "+61 2 8236 9200",
-        "website": "dintaifung.com.au",
-        "features": ["xiaolongbao", "dumpling", "casual_dining", "family_friendly"]
-    },
-    "place_015": {
-        "place_id": "place_015",
-        "name": "Pancakes on the Rocks",
-        "place_type": "restaurant",
-        "lat": -33.8590,
-        "lng": 151.2096,
-        "address": "4 Hickson Rd, The Rocks NSW 2000",
-        "rating": 4.0,
-        "price_level": 2,
-        "cuisine": "american",
-        "description": "Popular pancake house with 24/7 service",
-        "opening_hours": "Open 24 hours",
-        "phone": "+61 2 9247 6371",
-        "website": "pancakesontherocks.com.au",
-        "features": ["24_hours", "pancakes", "casual_dining", "family_friendly"]
-    },
-    
-    # More Shopping - Daha fazla alisveris
-    "place_016": {
-        "place_id": "place_016",
-        "name": "The Strand Arcade",
-        "place_type": "shopping_mall",
-        "lat": -33.8697,
-        "lng": 151.2078,
-        "address": "412-414 George St, Sydney NSW 2000",
-        "rating": 4.4,
-        "price_level": 3,
-        "description": "Beautiful Victorian-era shopping arcade",
-        "opening_hours": "Mon-Sat: 9:00 AM - 6:00 PM, Sun: 11:00 AM - 5:00 PM",
-        "phone": "+61 2 9232 4199",
-        "website": "strandarcade.com.au",
-        "features": ["historic_arcade", "boutique_shopping", "fashion", "jewelry"]
-    },
-    
-    # More Tourist Attractions - Daha fazla turistik yerler
-    "place_017": {
-        "place_id": "place_017",
-        "name": "Sydney Observatory",
-        "place_type": "tourist_attraction",
-        "lat": -33.8568,
-        "lng": 151.2044,
-        "address": "1003 Upper Fort St, Millers Point NSW 2000",
-        "rating": 4.3,
-        "price_level": 2,
-        "description": "Historic observatory with telescope shows and harbor views",
-        "opening_hours": "Daily: 10:00 AM - 5:00 PM",
-        "phone": "+61 2 9921 3485",
-        "website": "sydneyobservatory.com.au",
-        "features": ["astronomy", "telescope", "harbor_views", "educational"]
-    }
-}
+# MCP Tool Decorator
+def mcp_tool(name: str, description: str, parameters: dict = {}):
+    """MCP tool decorator - enhanced version"""
+    def decorator(func):
+        func.mcp_tool_name = name
+        func.mcp_tool_description = description
+        func.mcp_tool_parameters = parameters
+        return func
+    return decorator
+
+# =====================================
+# MCP TOOLS - All with proper USE_REAL_API logic
+# =====================================
 
 @mcp_tool(
     name="search_places",
@@ -446,23 +126,12 @@ async def get_place_details(place_id: str) -> Dict[str, Any]:
         Dict: Mekan detaylari
     """
     try:
-        if place_id not in PLACES_DATABASE:
-            return {
-                "status": "error",
-                "message": f"Place with ID '{place_id}' not found",
-                "error_code": "PLACE_NOT_FOUND",
-                "timestamp": datetime.now().isoformat()
-            }
-        
-        place_data = PLACES_DATABASE[place_id].copy()
-        
-        return {
-            "status": "success",
-            "data": {
-                "place": place_data,
-                "timestamp": datetime.now().isoformat()
-            }
-        }
+        if USE_REAL_API and GOOGLE_MAPS_API_KEY:
+            # Gercek Google Places API kullan
+            return await _get_place_details_real_api(place_id)
+        else:
+            # Mock data kullan
+            return await _get_place_details_mock_data(place_id)
         
     except Exception as error:
         return {
@@ -486,7 +155,7 @@ async def get_place_details(place_id: str) -> Dict[str, Any]:
 )
 async def get_places_by_type(place_type: str, limit: int = 10) -> Dict[str, Any]:
     """
-    Tip bazinda mekan listesi
+    Tip bazinda mekan listesi - NOW WITH PROPER USE_REAL_API LOGIC
     
     Args:
         place_type: Mekan tipi
@@ -496,28 +165,12 @@ async def get_places_by_type(place_type: str, limit: int = 10) -> Dict[str, Any]
         Dict: Mekan listesi
     """
     try:
-        type_places = []
-        
-        for place_id, place_data in PLACES_DATABASE.items():
-            if place_data["place_type"] == place_type:
-                type_places.append(place_data.copy())
-        
-        # Rating'e gore sirala (yuksekten dusuge)
-        type_places.sort(key=lambda x: x["rating"], reverse=True)
-        
-        # Limit uygula
-        limited_places = type_places[:limit]
-        
-        return {
-            "status": "success",
-            "data": {
-                "places": limited_places,
-                "place_type": place_type,
-                "total_found": len(type_places),
-                "limit": limit,
-                "timestamp": datetime.now().isoformat()
-            }
-        }
+        if USE_REAL_API and GOOGLE_MAPS_API_KEY:
+            # Gercek Google Places API kullan
+            return await _get_places_by_type_real_api(place_type, limit)
+        else:
+            # Mock data kullan
+            return await _get_places_by_type_mock_data(place_type, limit)
         
     except Exception as error:
         return {
@@ -536,7 +189,7 @@ async def get_places_by_type(place_type: str, limit: int = 10) -> Dict[str, Any]
 )
 async def get_popular_places(limit: int = 5) -> Dict[str, Any]:
     """
-    En populer mekanları al
+    En populer mekanları al - NOW WITH PROPER USE_REAL_API LOGIC
     
     Args:
         limit: Maksimum sonuc sayisi
@@ -545,10 +198,155 @@ async def get_popular_places(limit: int = 5) -> Dict[str, Any]:
         Dict: Populer mekanlar
     """
     try:
-        all_places = list(PLACES_DATABASE.values())
+        if USE_REAL_API and GOOGLE_MAPS_API_KEY:
+            # Gercek Google Places API kullan
+            return await _get_popular_places_real_api(limit)
+        else:
+            # Mock data kullan
+            return await _get_popular_places_mock_data(limit)
+        
+    except Exception as error:
+        return {
+            "status": "error",
+            "message": f"Failed to get popular places: {str(error)}",
+            "error_code": "POPULAR_ERROR",
+            "timestamp": datetime.now().isoformat()
+        }
+
+# =====================================
+# MOCK DATA IMPLEMENTATIONS - Using Clean Fixtures
+# =====================================
+
+async def _search_places_mock_data(query: str, lat: float, lng: float, 
+                                  place_type: str, radius: float, max_results: int) -> Dict[str, Any]:
+    """Mock data ile mekan arama - using clean fixtures"""
+    matching_places = []
+    
+    # Get clean fixtures data
+    all_places = get_all_mock_places()
+    
+    # Tum mekanları tara
+    for place_id, place_data in all_places.items():
+        place_matches = True
+        
+        # Tip filtresi kontrolu
+        if place_type != "all" and place_data.get("place_type") != place_type:
+            place_matches = False
+        
+        # Sorgu filtresi kontrolu
+        if query and place_matches:
+            query_lower = query.lower()
+            if not (query_lower in place_data.get("name", "").lower() or 
+                   query_lower in place_data.get("description", "").lower()):
+                place_matches = False
+        
+        # Mesafe filtresi kontrolu
+        if place_matches:
+            distance = _calculate_distance(
+                lat, lng, place_data.get("lat", 0), place_data.get("lng", 0)
+            )
+            if distance <= radius:
+                # Mesafe bilgisini ekle
+                place_data_with_distance = place_data.copy()
+                place_data_with_distance["distance_km"] = round(distance, 2)
+                matching_places.append(place_data_with_distance)
+    
+    # Mesafeye gore sirala
+    matching_places.sort(key=lambda x: x.get("distance_km", 0))
+    
+    # Maksimum sonuc sayisini uygula
+    limited_places = matching_places[:max_results]
+    
+    return {
+        "status": "success",
+        "data": {
+            "places": limited_places,
+            "total_found": len(matching_places),
+            "search_params": {
+                "query": query,
+                "location": {"lat": lat, "lng": lng},
+                "place_type": place_type,
+                "radius_km": radius,
+                "max_results": max_results
+            },
+            "timestamp": datetime.now().isoformat(),
+            "source": "clean_fixtures"
+        }
+    }
+
+async def _get_place_details_mock_data(place_id: str) -> Dict[str, Any]:
+    """Mock data'dan mekan detayları - using clean fixtures"""
+    try:
+        all_places = get_all_mock_places()
+        
+        if place_id in all_places:
+            place_data = all_places[place_id]
+            return {
+                "status": "success", 
+                "data": place_data,
+                "timestamp": datetime.now().isoformat(),
+                "source": "clean_fixtures"
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "Place not found in mock data",
+                "error_code": "PLACE_NOT_FOUND",
+                "timestamp": datetime.now().isoformat()
+            }
+            
+    except Exception as error:
+        return {
+            "status": "error",
+            "message": f"Failed to get mock place details: {str(error)}",
+            "error_code": "MOCK_DETAIL_ERROR",
+            "timestamp": datetime.now().isoformat()
+        }
+
+async def _get_places_by_type_mock_data(place_type: str, limit: int) -> Dict[str, Any]:
+    """Mock data'dan tip bazinda mekan listesi - using clean fixtures"""
+    try:
+        all_places = get_all_mock_places()
+        type_places = []
+        
+        for place_id, place_data in all_places.items():
+            if place_data.get("place_type") == place_type:
+                type_places.append(place_data.copy())
         
         # Rating'e gore sirala (yuksekten dusuge)
-        popular_places = sorted(all_places, key=lambda x: x["rating"], reverse=True)
+        type_places.sort(key=lambda x: x.get("rating", 0), reverse=True)
+        
+        # Limit uygula
+        limited_places = type_places[:limit]
+        
+        return {
+            "status": "success",
+            "data": {
+                "places": limited_places,
+                "place_type": place_type,
+                "total_found": len(type_places),
+                "limit": limit,
+                "timestamp": datetime.now().isoformat(),
+                "source": "clean_fixtures"
+            }
+        }
+        
+    except Exception as error:
+        return {
+            "status": "error",
+            "message": f"Failed to get mock places by type: {str(error)}",
+            "error_code": "MOCK_TYPE_ERROR",
+            "timestamp": datetime.now().isoformat()
+        }
+
+async def _get_popular_places_mock_data(limit: int) -> Dict[str, Any]:
+    """Mock data'dan populer mekanlar - using clean fixtures"""
+    try:
+        all_places = get_all_mock_places()
+        places_list = list(all_places.values())
+        
+        # Rating'e gore sirala (yuksekten dusuge)
+        popular_places = sorted(places_list, key=lambda x: x.get("rating", 0), reverse=True)
         
         # Limit uygula
         top_places = popular_places[:limit]
@@ -559,7 +357,8 @@ async def get_popular_places(limit: int = 5) -> Dict[str, Any]:
                 "places": top_places,
                 "criteria": "highest_rating",
                 "limit": limit,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
+                "source": "clean_fixtures"
             }
         }
         
@@ -571,10 +370,256 @@ async def get_popular_places(limit: int = 5) -> Dict[str, Any]:
             "timestamp": datetime.now().isoformat()
         }
 
+# =====================================
+# REAL API IMPLEMENTATIONS - Google Places API
+# =====================================
+
+async def _search_places_real_api(query: str, lat: float, lng: float,
+                                 place_type: str, radius: float, max_results: int) -> Dict[str, Any]:
+    """Gercek Google Places API ile mekan arama"""
+    try:
+        gmaps = googlemaps.Client(key=GOOGLE_MAPS_API_KEY)
+        
+        # Place type'i Google Places API formatina cevir
+        google_place_type = _convert_place_type_to_google_format(place_type)
+        
+        # Text search if query provided, otherwise nearby search
+        if query:
+            places_result = gmaps.places(
+                query=f"{query} in Sydney",
+                location=(lat, lng),
+                radius=radius * 1000,  # Convert km to meters
+                type=google_place_type if place_type != "all" else None,
+                language='en'
+            )
+        else:
+            places_result = gmaps.places_nearby(
+                location=(lat, lng),
+                radius=radius * 1000,  # Convert km to meters
+                type=google_place_type if place_type != "all" else None,
+                language='en'
+            )
+        
+        if not places_result or 'results' not in places_result:
+            return {
+                "status": "success",
+                "data": {
+                    "places": [],
+                    "total_found": 0,
+                    "search_params": {
+                        "query": query,
+                        "location": {"lat": lat, "lng": lng},
+                        "place_type": place_type,
+                        "radius_km": radius,
+                        "max_results": max_results
+                    },
+                    "timestamp": datetime.now().isoformat(),
+                    "source": "google_places_api"
+                }
+            }
+        
+        # Format results
+        formatted_places = []
+        for place in places_result['results'][:max_results]:
+            formatted_place = _format_google_place_response(place, lat, lng)
+            formatted_places.append(formatted_place)
+        
+        return {
+            "status": "success",
+            "data": {
+                "places": formatted_places,
+                "total_found": len(places_result['results']),
+                "search_params": {
+                    "query": query,
+                    "location": {"lat": lat, "lng": lng},
+                    "place_type": place_type,
+                    "radius_km": radius,
+                    "max_results": max_results
+                },
+                "timestamp": datetime.now().isoformat(),
+                "source": "google_places_api"
+            }
+        }
+        
+    except Exception as error:
+        logger.error(f"Google Places API error: {error}")
+        return {
+            "status": "error",
+            "message": f"Google Places API error: {str(error)}",
+            "error_code": "API_ERROR",
+            "timestamp": datetime.now().isoformat()
+        }
+
+async def _get_place_details_real_api(place_id: str) -> Dict[str, Any]:
+    """Gercek Google Places API'den mekan detayları"""
+    try:
+        gmaps = googlemaps.Client(key=GOOGLE_MAPS_API_KEY)
+        
+        # Get place details from Google
+        place_details = gmaps.place(
+            place_id=place_id,
+            fields=['name', 'rating', 'formatted_address', 'geometry', 'type', 
+                   'opening_hours', 'formatted_phone_number', 'website', 'price_level',
+                   'photo', 'review', 'user_ratings_total'],
+            language='en'
+        )
+        
+        if 'result' not in place_details:
+            return {
+                "status": "error",
+                "message": "Place not found",
+                "error_code": "PLACE_NOT_FOUND",
+                "timestamp": datetime.now().isoformat()
+            }
+        
+        place_data = place_details['result']
+        formatted_place = _format_google_place_response(place_data, -33.8688, 151.2093)
+        
+        return {
+            "status": "success",
+            "data": formatted_place,
+            "timestamp": datetime.now().isoformat(),
+            "source": "google_places_api"
+        }
+        
+    except Exception as error:
+        logger.error(f"Google Place Details API error: {error}")
+        return {
+            "status": "error",
+            "message": f"Google Places API error: {str(error)}",
+            "error_code": "API_ERROR", 
+            "timestamp": datetime.now().isoformat()
+        }
+
+async def _get_places_by_type_real_api(place_type: str, limit: int) -> Dict[str, Any]:
+    """Gercek Google Places API'den tip bazinda mekan listesi"""
+    try:
+        gmaps = googlemaps.Client(key=GOOGLE_MAPS_API_KEY)
+        
+        # Sydney center coordinates
+        sydney_center = (-33.8688, 151.2093)
+        
+        # Convert to Google place type
+        google_type = _convert_place_type_to_google_format(place_type)
+        
+        # Nearby search
+        places_result = gmaps.places_nearby(
+            location=sydney_center,
+            radius=10000,  # 10km radius for city-wide search
+            type=google_type,
+            language='en'
+        )
+        
+        if not places_result or 'results' not in places_result:
+            return {
+                "status": "success",
+                "data": {
+                    "places": [],
+                    "place_type": place_type,
+                    "total_found": 0,
+                    "limit": limit,
+                    "timestamp": datetime.now().isoformat(),
+                    "source": "google_places_api"
+                }
+            }
+        
+        # Format results
+        formatted_places = []
+        for place in places_result['results'][:limit]:
+            formatted_place = _format_google_place_response(place, sydney_center[0], sydney_center[1])
+            formatted_places.append(formatted_place)
+        
+        # Sort by rating
+        formatted_places.sort(key=lambda x: x.get("rating", 0), reverse=True)
+        
+        return {
+            "status": "success",
+            "data": {
+                "places": formatted_places,
+                "place_type": place_type,
+                "total_found": len(places_result['results']),
+                "limit": limit,
+                "timestamp": datetime.now().isoformat(),
+                "source": "google_places_api"
+            }
+        }
+        
+    except Exception as error:
+        logger.error(f"Google Places API error: {error}")
+        return {
+            "status": "error",
+            "message": f"Google Places API error: {str(error)}",
+            "error_code": "API_ERROR",
+            "timestamp": datetime.now().isoformat()
+        }
+
+async def _get_popular_places_real_api(limit: int) -> Dict[str, Any]:
+    """Gercek Google Places API'den populer mekanlar"""
+    try:
+        gmaps = googlemaps.Client(key=GOOGLE_MAPS_API_KEY)
+        
+        # Sydney center coordinates
+        sydney_center = (-33.8688, 151.2093)
+        
+        # Search for highly rated places in Sydney
+        places_result = gmaps.places(
+            query="popular attractions restaurants Sydney",
+            location=sydney_center,
+            radius=15000,  # 15km radius for wider search
+            language='en'
+        )
+        
+        if not places_result or 'results' not in places_result:
+            return {
+                "status": "success",
+                "data": {
+                    "places": [],
+                    "criteria": "highest_rating",
+                    "limit": limit,
+                    "timestamp": datetime.now().isoformat(),
+                    "source": "google_places_api"
+                }
+            }
+        
+        # Format and filter highly rated places
+        formatted_places = []
+        for place in places_result['results']:
+            if place.get('rating', 0) >= 4.0:  # Only highly rated places
+                formatted_place = _format_google_place_response(place, sydney_center[0], sydney_center[1])
+                formatted_places.append(formatted_place)
+        
+        # Sort by rating (highest first)
+        formatted_places.sort(key=lambda x: x.get("rating", 0), reverse=True)
+        
+        # Apply limit
+        top_places = formatted_places[:limit]
+        
+        return {
+            "status": "success",
+            "data": {
+                "places": top_places,
+                "criteria": "highest_rating",
+                "limit": limit,
+                "timestamp": datetime.now().isoformat(),
+                "source": "google_places_api"
+            }
+        }
+        
+    except Exception as error:
+        logger.error(f"Google Places API error: {error}")
+        return {
+            "status": "error",
+            "message": f"Google Places API error: {str(error)}",
+            "error_code": "API_ERROR",
+            "timestamp": datetime.now().isoformat()
+        }
+
+# =====================================
+# UTILITY FUNCTIONS
+# =====================================
+
 def _calculate_distance(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
-    """
-    Haversine formulu ile iki nokta arasi mesafeyi km cinsinden hesapla
-    """
+    """Haversine formulu ile iki nokta arasi mesafeyi km cinsinden hesapla"""
     import math
     
     # Koordinatlari radyana cevir
@@ -597,243 +642,105 @@ def _calculate_distance(lat1: float, lng1: float, lat2: float, lng2: float) -> f
     
     return earth_radius_km * c
 
-async def _get_location_name(lat: float, lng: float) -> str:
-    """Koordinatlardan konum adini al (reverse geocoding)"""
-    try:
-        if USE_REAL_API and GOOGLE_MAPS_API_KEY:
-            gmaps = googlemaps.Client(key=GOOGLE_MAPS_API_KEY)
-            result = gmaps.reverse_geocode((lat, lng))
-            if result:
-                # Suburb/locality adini bul
-                for component in result[0].get('address_components', []):
-                    if 'locality' in component.get('types', []) or 'sublocality' in component.get('types', []):
-                        return component['long_name']
-                # Fallback olarak formatted_address'den suburb cikarmaya calis
-                formatted_address = result[0].get('formatted_address', '')
-                if 'NSW' in formatted_address:
-                    parts = formatted_address.split(',')
-                    for part in parts:
-                        if 'NSW' in part:
-                            suburb = part.replace('NSW', '').strip()
-                            if suburb and len(suburb) > 2:
-                                return suburb
-        return ""
-    except Exception as error:
-        logger.error(f"Location name lookup error: {error}")
-        return ""
-
-# Mock ve Real API implementation functions
-
-async def _search_places_mock_data(query: str, lat: float, lng: float, 
-                                  place_type: str, radius: float, max_results: int) -> Dict[str, Any]:
-    """Mock data ile mekan arama"""
-    matching_places = []
-    
-    # Tum mekanları tara
-    for place_id, place_data in PLACES_DATABASE.items():
-        place_matches = True
-        
-        # Tip filtresi kontrolu
-        if place_type != "all" and place_data["place_type"] != place_type:
-            place_matches = False
-        
-        # Sorgu filtresi kontrolu
-        if query and place_matches:
-            query_lower = query.lower()
-            if not (query_lower in place_data["name"].lower() or 
-                   query_lower in place_data["description"].lower()):
-                place_matches = False
-        
-        # Mesafe filtresi kontrolu
-        if place_matches:
-            distance = _calculate_distance(
-                lat, lng, place_data["lat"], place_data["lng"]
-            )
-            if distance > radius:
-                place_matches = False
-            else:
-                # Mesafe bilgisini ekle
-                place_data_with_distance = place_data.copy()
-                place_data_with_distance["distance_km"] = round(distance, 2)
-                matching_places.append(place_data_with_distance)
-    
-    # Mesafeye gore sirala
-    matching_places.sort(key=lambda x: x["distance_km"])
-    
-    # Maksimum sonuc sayisini uygula
-    limited_places = matching_places[:max_results]
-    
-    return {
-        "status": "success",
-        "data": {
-            "places": limited_places,
-            "total_found": len(matching_places),
-            "search_params": {
-                "query": query,
-                "location": {"lat": lat, "lng": lng},
-                "place_type": place_type,
-                "radius_km": radius,
-                "max_results": max_results
-            },
-            "timestamp": datetime.now().isoformat(),
-            "source": "mock_database"
-        }
-    }
-
-async def _search_places_real_api(query: str, lat: float, lng: float,
-                                 place_type: str, radius: float, max_results: int) -> Dict[str, Any]:
-    """Gercek Google Places API ile mekan arama - gelismis konum tabanli arama"""
-    try:
-        # Google Maps client olustur
-        gmaps = googlemaps.Client(key=GOOGLE_MAPS_API_KEY)
-        
-        # Place type'i Google Places API formatina cevir
-        google_place_type = _convert_place_type_to_google_format(place_type)
-        
-        # IMPROVED: Use text search for better location-specific results
-        # Text search is better for finding specific cuisine types in specific areas
-        if query and query.strip():
-            # Try location-specific search first
-            location_name = await _get_location_name(lat, lng)
-            location_specific_query = f"{query} {location_name}" if location_name else query
-            
-            logger.info(f"Searching with location-specific query: '{location_specific_query}'")
-            places_result = gmaps.places(
-                query=location_specific_query,
-                location=(lat, lng),
-                radius=int(radius * 1000),  # km'yi metre'ye cevir
-                language='en'
-            )
-            
-            # If no results with location-specific query, try broader search
-            if not places_result.get('results'):
-                logger.info(f"No results with location-specific query, trying broader search: '{query}'")
-                places_result = gmaps.places(
-                    query=query,
-                    location=(lat, lng),
-                    radius=int(radius * 1000),
-                    language='en'
-                )
-        else:
-            # Fallback to nearby search if no query
-            places_result = gmaps.places_nearby(
-                location=(lat, lng),
-                radius=int(radius * 1000),
-                type=google_place_type if google_place_type != "all" else None,
-                language='en'
-            )
-        
-        if places_result.get('results'):
-            formatted_places = []
-            for place in places_result['results']:
-                # Google API response'unu bizim formata cevir
-                formatted_place = _format_google_place_response(place, lat, lng)
-                
-                # Apply place type filter if specified
-                if place_type != "all":
-                    place_types = place.get('types', [])
-                    if not any(ptype in place_types for ptype in ['restaurant', 'food', 'establishment']):
-                        continue
-                
-                formatted_places.append(formatted_place)
-            
-            # CRITICAL FIX: Sort by distance (closest first) - Google doesn't always return sorted
-            formatted_places.sort(key=lambda x: x.get('distance_km', 999))
-            
-            # Apply max_results limit after sorting
-            limited_places = formatted_places[:max_results]
-            
-            logger.info(f"Found {len(limited_places)} places, closest: {limited_places[0]['name'] if limited_places else 'none'} at {limited_places[0]['distance_km'] if limited_places else 'N/A'}km")
-            
-            return {
-                "status": "success",
-                "data": {
-                    "places": limited_places,
-                    "total_found": len(formatted_places),
-                    "search_params": {
-                        "query": query,
-                        "location": {"lat": lat, "lng": lng},
-                        "place_type": place_type,
-                        "radius_km": radius,
-                        "max_results": max_results
-                    },
-                    "timestamp": datetime.now().isoformat(),
-                    "source": "google_places_api"
-                }
-            }
-        else:
-            # API'den sonuc alamazsa mock data'ya dusur
-            logger.warning("No results from Google Places API, falling back to mock data")
-            return await _search_places_mock_data(query, lat, lng, place_type, radius, max_results)
-            
-    except Exception as error:
-        # Google API hatasi durumunda mock data'ya dusur
-        logger.error(f"Google Places API error, falling back to mock data: {error}")
-        return await _search_places_mock_data(query, lat, lng, place_type, radius, max_results)
-
 def _convert_place_type_to_google_format(place_type: str) -> str:
-    """Bizim place type'ları Google Places API formatina cevir"""
+    """Yer tipini Google Places API formatina cevir"""
     type_mapping = {
-        "restaurant": "restaurant",
-        "tourist_attraction": "tourist_attraction",
-        "shopping_mall": "shopping_mall",
-        "museum": "museum",
-        "park": "park",
-        "transport": "transit_station",
-        "all": "all"
+        'restaurant': 'restaurant',
+        'cafe': 'cafe',
+        'tourist_attraction': 'tourist_attraction',
+        'shopping_mall': 'shopping_mall',
+        'park': 'park',
+        'museum': 'museum',
+        'bar': 'bar',
+        'night_club': 'night_club',
+        'gym': 'gym',
+        'hospital': 'hospital',
+        'bank': 'bank',
+        'gas_station': 'gas_station',
+        'lodging': 'lodging',
+        'transport': 'transit_station'
     }
-    return type_mapping.get(place_type, "establishment")
+    return type_mapping.get(place_type, place_type)
 
 def _format_google_place_response(google_place: Dict, search_lat: float, search_lng: float) -> Dict[str, Any]:
-    """Google Places API response'unu bizim formata cevir"""
-    place_lat = google_place['geometry']['location']['lat']
-    place_lng = google_place['geometry']['location']['lng']
-    
-    # Mesafeyi hesapla
-    distance_km = _calculate_distance(search_lat, search_lng, place_lat, place_lng)
-    
-    return {
-        "place_id": google_place.get('place_id', 'unknown'),
-        "name": google_place.get('name', 'Unknown Place'),
-        "place_type": _convert_google_type_to_our_format(google_place.get('types', [])),
-        "lat": place_lat,
-        "lng": place_lng,
-        "address": google_place.get('vicinity', 'Address not available'),
-        "rating": google_place.get('rating', 0.0),
-        "price_level": google_place.get('price_level', 0),
-        "description": f"Google Places result: {google_place.get('name', 'Unknown Place')}",
-        "opening_hours": "Check Google for hours",
-        "distance_km": round(distance_km, 2),
-        "source": "google_places_api"
-    }
+    """Google Places API yaniti format"""
+    try:
+        location = google_place.get('geometry', {}).get('location', {})
+        place_lat = location.get('lat', 0)
+        place_lng = location.get('lng', 0)
+        
+        # Calculate distance
+        distance = _calculate_distance(search_lat, search_lng, place_lat, place_lng)
+        
+        # Format the response to match our standard structure
+        formatted_place = {
+            'place_id': google_place.get('place_id', ''),
+            'name': google_place.get('name', ''),
+            'address': google_place.get('formatted_address', google_place.get('vicinity', '')),
+            'rating': google_place.get('rating', 0.0),
+            'user_ratings_total': google_place.get('user_ratings_total', 0),
+            'price_level': google_place.get('price_level', 0),
+            'location': {
+                'lat': place_lat,
+                'lng': place_lng
+            },
+            'distance_km': round(distance, 2),
+            'phone': google_place.get('formatted_phone_number', ''),
+            'website': google_place.get('website', ''),
+            'opening_hours': {
+                'open_now': google_place.get('opening_hours', {}).get('open_now', False)
+            },
+            'photos': _extract_photo_references(google_place.get('photos', [])),
+            'types': google_place.get('types', []),
+            'place_type': _convert_google_type_to_our_format(google_place.get('types', []))
+        }
+        
+        return formatted_place
+        
+    except Exception as error:
+        logger.error(f"Error formatting Google place: {error}")
+        return {}
 
 def _convert_google_type_to_our_format(google_types: List[str]) -> str:
-    """Google Places API type'larini bizim formatimiza cevir"""
-    # Oncelik sirasi ile type mapping
-    priority_mapping = {
-        "restaurant": "restaurant",
-        "food": "restaurant", 
-        "tourist_attraction": "tourist_attraction",
-        "shopping_mall": "shopping_mall",
-        "museum": "museum",
-        "park": "park",
-        "transit_station": "transport",
-        "subway_station": "transport",
-        "bus_station": "transport"
-    }
+    """Google place types'i bizim formatimiza cevir"""
+    # Priority mapping - first match wins
+    type_priority = [
+        'restaurant', 'tourist_attraction', 'shopping_mall', 
+        'museum', 'park', 'cafe', 'bar', 'lodging'
+    ]
     
-    for google_type in google_types:
-        if google_type in priority_mapping:
-            return priority_mapping[google_type]
+    for our_type in type_priority:
+        if our_type in google_types:
+            return our_type
     
-    return "tourist_attraction"  # Default
+    # Fallback to first type or unknown
+    return google_types[0] if google_types else 'unknown'
 
-# Backward compatibility icin wrapper class
+def _extract_photo_references(photos_data: list) -> list:
+    """Google Photos data'dan referanslari cikart"""
+    try:
+        photo_refs = []
+        for photo in photos_data[:3]:  # Maximum 3 photos
+            if 'photo_reference' in photo:
+                photo_refs.append({
+                    'photo_reference': photo['photo_reference'],
+                    'width': photo.get('width', 400),
+                    'height': photo.get('height', 400)
+                })
+        return photo_refs
+    except Exception as error:
+        logger.error(f"Error extracting photo references: {error}")
+        return []
+
+# =====================================
+# WRAPPER CLASS FOR COMPATIBILITY
+# =====================================
+
 class PlacesTool:
-    """Backward compatibility icin PlacesTool class wrapper"""
+    """MCP Places Tool wrapper class - clean architecture version"""
     
     def __init__(self):
-        self.places_database = PLACES_DATABASE
+        logger.info("🏗️ PlacesTool initialized with clean fixtures architecture")
     
     async def search_places(self, query: str = "", lat: float = -33.8688, 
                            lng: float = 151.2093, place_type: str = "all",
@@ -854,4 +761,13 @@ class PlacesTool:
         return await get_popular_places(limit)
 
 # MCP tool instance'i olustur
-places_tool = PlacesTool() 
+places_tool = PlacesTool()
+
+# Export for backward compatibility
+__all__ = [
+    'search_places',
+    'get_place_details', 
+    'get_places_by_type',
+    'get_popular_places',
+    'places_tool'
+] 

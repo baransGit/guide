@@ -1,5 +1,13 @@
 # Sydney Guide - Cursor Rules
 
+## ⚠️ CRITICAL REMINDERS - DO NOT FORGET ⚠️
+
+- **ALREADY IN BACKEND**: Working directory is already `/backend/` - DO NOT run `cd backend`
+- **USE PYTHON3**: Always use `python3` not `python`
+- **SERVER STARTS SUCCESSFULLY**: The FastMCP server works, don't get stuck on startup
+- **MOCK_MODE=false**: Environment is configured for real APIs
+- **4 TOOLS READY**: All tools have dual structure (mock + real API)
+
 ## Project Overview
 
 Sydney Guide: Tourist assistant mobile app with AI chatbot (Claude + MCP integration)

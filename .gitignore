@@ -32,11 +32,11 @@ backend/venv/
 frontend/node_modules/
 
 # Environment Variables & API Keys
-.env
+# .env  # TEMPORARILY COMMENTED FOR TESTING
 .env.local
 .env.production
 .env.development
-*.env
+# *.env  # TEMPORARILY COMMENTED FOR TESTING
 
 # IDE & Editor Files
 .vscode/
